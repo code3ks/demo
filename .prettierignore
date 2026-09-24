@@ -2,3 +2,5 @@ dist
 node_modules
 reference
 pnpm-lock.yaml
+docs/IDEMPOTENCY.md
+IMPLEMENTATION_SUMMARY.md
