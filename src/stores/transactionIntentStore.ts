@@ -201,7 +201,7 @@ export const useTransactionIntentStore = create<TransactionIntentState>()(
           ),
         }));
       },
-    },
+    }),
     {
       name: 'wraith-transaction-intents',
     },
