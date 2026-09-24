@@ -40,6 +40,7 @@ import {
 import { useActivityStore } from '@/stores/activityStore';
 import { ExpiringNamesBanner } from '@/components/ExpiringNamesBanner';
 import { decodeQrImage, isCameraUnavailableError, parseStellarQrPayload } from '@/utils/qr';
+import { useIdempotentTransaction } from '@/hooks/useIdempotentTransaction';
 
 const ANNOUNCER_CONTRACT = 'CCJLJ2QRBJAAKIG6ELNQVXLLWMKKWVN5O2FKWUETHZGMPAD4MHK7WVWL';
 const STELLAR_BASE_FEE_XLM = 0.00001;
@@ -106,8 +107,18 @@ export function StellarSend() {
   const paramExp = searchParams.get('exp');
 
   const { address, isConnected, signTransaction, isNetworkMismatch } = useStellarWallet();
-  const addActivity = useActivityStore((state) => state.addEntry);
-  const updateActivity = useActivityStore((state) => state.updateStatus);
+  
+  // Idempotent transaction submission
+  const { isSubmitting: isIdempotentSubmitting, submit: submitIdempotent, reset: resetIdempotent } = useIdempotentTransaction({
+    chain: 'stellar',
+    wallet: address || '',
+    action: 'send',
+    metadata: {
+      recipient: metaAddress,
+      amount: amountValue,
+      asset: assetKey,
+    },
+  });
   const [recipient, setRecipient] = useState(paramTo || '');
   const [amount, setAmount] = useState(paramAmount || '');
   const [assetKey, setAssetKey] = useState<StellarAssetKey>('XLM');
@@ -528,181 +539,179 @@ export function StellarSend() {
     setError('');
     setIsPending(true);
     setRetryStatus('');
-    let txHashHex = '';
 
     const onRetry = (attempt: number) => setRetryStatus(`Retrying (${attempt}/3)…`);
 
-    try {
-      const metaAddress = recipient;
-      if (!metaAddress.startsWith('st:xlm:')) {
-        setError(t('stellar.validMetaAddressError'));
-        setIsPending(false);
-        return;
-      }
+    await submitIdempotent(
+      async () => {
+        const metaAddress = recipient;
+        if (!metaAddress.startsWith('st:xlm:')) {
+          throw new Error(t('stellar.validMetaAddressError'));
+        }
 
-      const decoded = decodeStealthMetaAddress(metaAddress);
-      const result = generateStealthAddress(decoded.spendingPubKey, decoded.viewingPubKey);
-      setStealthResult(result);
-      trackEvent('send_submitted');
+        const decoded = decodeStealthMetaAddress(metaAddress);
+        const result = generateStealthAddress(decoded.spendingPubKey, decoded.viewingPubKey);
+        setStealthResult(result);
+        trackEvent('send_submitted');
 
-      const horizonUrl = STELLAR_NETWORK.horizonUrl;
-      const networkPassphrase = STELLAR_NETWORK.networkPassphrase;
-      const currentAssetInfo = getAssetByKey(assetKey);
-      const sendAsset = currentAssetInfo.toAsset();
+        const horizonUrl = STELLAR_NETWORK.horizonUrl;
+        const networkPassphrase = STELLAR_NETWORK.networkPassphrase;
+        const currentAssetInfo = getAssetByKey(assetKey);
+        const sendAsset = currentAssetInfo.toAsset();
 
-      const accountRes = await fetchWithRetry(`${horizonUrl}/accounts/${address}`, {}, { onRetry });
-      setRetryStatus('');
-      if (!accountRes.ok) throw new Error('Failed to load sender account');
-      const accountData = (await accountRes.json()) as HorizonAccount;
-      const sourceAccount = new Account(address, accountData.sequence);
-
-      let stealthExists = false;
-      try {
-        const stealthCheckRes = await fetchWithRetry(
-          `${horizonUrl}/accounts/${result.stealthAddress}`,
-          {},
-          { onRetry },
-        );
-        stealthExists = stealthCheckRes.ok;
-      } catch {
-        // Transient network error on existence check — assume not created yet
-      } finally {
+        const accountRes = await fetchWithRetry(`${horizonUrl}/accounts/${address}`, {}, { onRetry });
         setRetryStatus('');
-      }
+        if (!accountRes.ok) throw new Error('Failed to load sender account');
+        const accountData = (await accountRes.json()) as HorizonAccount;
+        const sourceAccount = new Account(address, accountData.sequence);
 
-      let builder = new TransactionBuilder(sourceAccount, { fee: '100', networkPassphrase });
+        let stealthExists = false;
+        try {
+          const stealthCheckRes = await fetchWithRetry(
+            `${horizonUrl}/accounts/${result.stealthAddress}`,
+            {},
+            { onRetry },
+          );
+          stealthExists = stealthCheckRes.ok;
+        } catch {
+          // Transient network error on existence check — assume not created yet
+        } finally {
+          setRetryStatus('');
+        }
 
-      if (stealthExists) {
-        builder = builder.addOperation(
-          Operation.payment({
-            destination: result.stealthAddress,
-            asset: sendAsset,
-            amount: amountValue,
-          }),
-        );
-      } else if (currentAssetInfo.isNative) {
-        builder = builder.addOperation(
-          Operation.createAccount({
-            destination: result.stealthAddress,
-            startingBalance: amountValue,
-          }),
-        );
-      } else {
-        builder = builder.addOperation(
-          Operation.payment({
-            destination: result.stealthAddress,
-            asset: sendAsset,
-            amount: amountValue,
-          }),
-        );
-      }
+        let builder = new TransactionBuilder(sourceAccount, { fee: '100', networkPassphrase });
 
-      builder = builder.setTimeout(30);
-
-      if (memo) {
-        builder = builder.addMemo(Memo.text(memo));
-      }
-
-      const classicTx = builder.build();
-
-      const signedXdr = await signTransaction(classicTx.toXDR());
-      txHashHex = classicTx.hash().toString('hex');
-      setTxHash(txHashHex);
-
-      addActivity({
-        id: txHashHex,
-        chain: 'stellar',
-        wallet: address,
-        kind: 'stealth-send',
-        direction: 'out',
-        status: 'pending',
-        amount: amountValue,
-        recipient: metaAddress,
-        timestamp: Date.now(),
-      });
-
-      const submitRes = await fetch(`${horizonUrl}/transactions`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-        body: `tx=${encodeURIComponent(signedXdr)}`,
-      });
-
-      const submitData = await submitRes.json();
-      if (!submitRes.ok) {
-        throw new Error(
-          submitData.extras?.result_codes?.transaction ||
-            submitData.title ||
-            t('common.transactionFailed'),
-        );
-      }
-
-      setTxHash(submitData.hash);
-
-      // Add recipient to history after successful send
-      addToHistory(recipient);
-
-      // Announce via Soroban (best-effort)
-      try {
-        const { rpc: rpcMod } = await import('@stellar/stellar-sdk');
-        const soroban =
-          (window as any).sorobanServerMock || new rpcMod.Server(STELLAR_NETWORK.rpcUrl);
-        const announcerContract = new Contract(ANNOUNCER_CONTRACT);
-
-        const freshRes = await fetchWithRetry(`${horizonUrl}/accounts/${address}`, {}, { onRetry });
-        setRetryStatus('');
-        const freshData = await freshRes.json();
-        const freshAccount = new Account(address, freshData.sequence);
-
-        const announceTx = new TransactionBuilder(freshAccount, { fee: '100', networkPassphrase })
-          .addOperation(
-            announcerContract.call(
-              'announce',
-              nativeToScVal(SCHEME_ID, { type: 'u32' }),
-              new Address(result.stealthAddress).toScVal(),
-              xdr.ScVal.scvBytes(Buffer.from(result.ephemeralPubKey)),
-              xdr.ScVal.scvBytes(Buffer.from([result.viewTag])),
-            ),
-          )
-          .setTimeout(30)
-          .build();
-
-        const simulated: unknown = await withRetry(() => soroban.simulateTransaction(announceTx), {
-          onRetry,
-        });
-        setRetryStatus('');
-        if (
-          simulated &&
-          typeof simulated === 'object' &&
-          !('error' in (simulated as Record<string, unknown>))
-        ) {
-          const assembled = rpcMod
-            .assembleTransaction(
-              announceTx,
-              simulated as Parameters<typeof rpcMod.assembleTransaction>[1],
-            )
-            .build();
-
-          const signedAnnounce = await signTransaction(assembled.toXDR());
-          await soroban.sendTransaction(
-            TransactionBuilder.fromXDR(signedAnnounce, networkPassphrase),
+        if (stealthExists) {
+          builder = builder.addOperation(
+            Operation.payment({
+              destination: result.stealthAddress,
+              asset: sendAsset,
+              amount: amountValue,
+            }),
+          );
+        } else if (currentAssetInfo.isNative) {
+          builder = builder.addOperation(
+            Operation.createAccount({
+              destination: result.stealthAddress,
+              startingBalance: amountValue,
+            }),
+          );
+        } else {
+          builder = builder.addOperation(
+            Operation.payment({
+              destination: result.stealthAddress,
+              asset: sendAsset,
+              amount: amountValue,
+            }),
           );
         }
-      } catch {
-        // Announcement is best-effort — payment already succeeded
-      } finally {
-        setRetryStatus('');
-      }
 
-      setIsSuccess(true);
-      updateActivity(txHashHex, 'confirmed');
-    } catch (err) {
-      setRetryStatus('');
-      if (txHashHex) updateActivity(txHashHex, 'failed');
-      setError(err instanceof Error ? err.message : t('common.transactionFailed'));
-    } finally {
-      setIsPending(false);
-    }
-  }, [address, recipient, amount, assetKey, signTransaction, t]);
+        builder = builder.setTimeout(30);
+
+        if (memo) {
+          builder = builder.addMemo(Memo.text(memo));
+        }
+
+        const classicTx = builder.build();
+
+        const signedXdr = await signTransaction(classicTx.toXDR());
+        const txHashHex = classicTx.hash().toString('hex');
+        setTxHash(txHashHex);
+
+        const submitRes = await fetch(`${horizonUrl}/transactions`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+          body: `tx=${encodeURIComponent(signedXdr)}`,
+        });
+
+        const submitData = await submitRes.json();
+        if (!submitRes.ok) {
+          throw new Error(
+            submitData.extras?.result_codes?.transaction ||
+              submitData.title ||
+              t('common.transactionFailed'),
+          );
+        }
+
+        setTxHash(submitData.hash);
+
+        // Add recipient to history after successful send
+        addToHistory(recipient);
+
+        // Announce via Soroban (best-effort)
+        try {
+          const { rpc: rpcMod } = await import('@stellar/stellar-sdk');
+          const soroban =
+            (window as any).sorobanServerMock || new rpcMod.Server(STELLAR_NETWORK.rpcUrl);
+          const announcerContract = new Contract(ANNOUNCER_CONTRACT);
+
+          const freshRes = await fetchWithRetry(`${horizonUrl}/accounts/${address}`, {}, { onRetry });
+          setRetryStatus('');
+          const freshData = await freshRes.json();
+          const freshAccount = new Account(address, freshData.sequence);
+
+          const announceTx = new TransactionBuilder(freshAccount, { fee: '100', networkPassphrase })
+            .addOperation(
+              announcerContract.call(
+                'announce',
+                nativeToScVal(SCHEME_ID, { type: 'u32' }),
+                new Address(result.stealthAddress).toScVal(),
+                xdr.ScVal.scvBytes(Buffer.from(result.ephemeralPubKey)),
+                xdr.ScVal.scvBytes(Buffer.from([result.viewTag])),
+              ),
+            )
+            .setTimeout(30)
+            .build();
+
+          const simulated: unknown = await withRetry(() => soroban.simulateTransaction(announceTx), {
+            onRetry,
+          });
+          setRetryStatus('');
+          if (
+            simulated &&
+            typeof simulated === 'object' &&
+            !('error' in (simulated as Record<string, unknown>))
+          ) {
+            const assembled = rpcMod
+              .assembleTransaction(
+                announceTx,
+                simulated as Parameters<typeof rpcMod.assembleTransaction>[1],
+              )
+              .build();
+
+            const signedAnnounce = await signTransaction(assembled.toXDR());
+            await soroban.sendTransaction(
+              TransactionBuilder.fromXDR(signedAnnounce, networkPassphrase),
+            );
+          }
+        } catch {
+          // Announcement is best-effort — payment already succeeded
+        } finally {
+          setRetryStatus('');
+        }
+
+        return {
+          txHash: txHashHex,
+          result: {
+            success: true,
+            stealthAddress: result.stealthAddress,
+            horizonHash: submitData.hash,
+          },
+        };
+      },
+      {
+        onSuccess: () => {
+          setIsSuccess(true);
+        },
+        onError: (error) => {
+          setRetryStatus('');
+          setError(error.message);
+        },
+      }
+    );
+
+    setIsPending(false);
+  }, [address, recipient, amount, assetKey, signTransaction, t, submitIdempotent, canSubmit, validationError, isNetworkMismatch]);
 
   const reset = () => {
     setRecipient(paramTo || '');
@@ -723,6 +732,7 @@ export function StellarSend() {
     setShowUnknownWarning(false);
     setShowSaveDialog(false);
     setContactName('');
+    resetIdempotent();
   };
 
   const handleSaveContact = () => {
@@ -910,7 +920,7 @@ export function StellarSend() {
 
           <button
             onClick={handleSend}
-            disabled={!recipient || !amount || isPending}
+            disabled={!recipient || !amount || isPending || isIdempotentSubmitting}
             className="h-12 w-full bg-primary font-heading text-[13px] font-semibold uppercase tracking-widest text-surface transition-colors hover:brightness-110 disabled:opacity-30"
           >
             {isPending ? t('common.confirmInWallet') : t('common.sendPrivately')}
