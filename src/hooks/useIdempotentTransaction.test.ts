@@ -24,7 +24,7 @@ describe('useIdempotentTransaction', () => {
         wallet: 'GTEST123',
         action: 'send',
         metadata: { recipient: 'st:xlm:test', amount: '10' },
-      })
+      }),
     );
 
     await act(async () => {
@@ -66,7 +66,7 @@ describe('useIdempotentTransaction', () => {
         wallet: 'GTEST123',
         action: 'send',
         metadata: { recipient: 'st:xlm:test', amount: '10' },
-      })
+      }),
     );
 
     // Simulate double click
@@ -90,16 +90,18 @@ describe('useIdempotentTransaction', () => {
         chain: 'stellar',
         wallet: 'GTEST123',
         action: 'send',
-      })
+      }),
     );
 
     await act(async () => {
       await result.current.submit(mockTxBuilder, { onError });
     });
 
-    expect(onError).toHaveBeenCalledWith(expect.objectContaining({
-      message: 'User rejected signature',
-    }));
+    expect(onError).toHaveBeenCalledWith(
+      expect.objectContaining({
+        message: 'User rejected signature',
+      }),
+    );
 
     // Check intent was marked as failed
     const { intents } = useTransactionIntentStore.getState();
@@ -117,16 +119,18 @@ describe('useIdempotentTransaction', () => {
         chain: 'stellar',
         wallet: 'GTEST123',
         action: 'send',
-      })
+      }),
     );
 
     await act(async () => {
       await result.current.submit(mockTxBuilder, { onError });
     });
 
-    expect(onError).toHaveBeenCalledWith(expect.objectContaining({
-      message: 'Network timeout',
-    }));
+    expect(onError).toHaveBeenCalledWith(
+      expect.objectContaining({
+        message: 'Network timeout',
+      }),
+    );
 
     const { intents } = useTransactionIntentStore.getState();
     expect(intents[0].status).toBe('failed');
@@ -153,7 +157,7 @@ describe('useIdempotentTransaction', () => {
         wallet: 'GTEST123',
         action: 'send',
         metadata: { recipient: 'st:xlm:test', amount: '10' },
-      })
+      }),
     );
 
     act(() => {
@@ -171,7 +175,7 @@ describe('useIdempotentTransaction', () => {
         wallet: 'GTEST123',
         action: 'send',
         metadata: { recipient: 'st:xlm:test', amount: '10' },
-      })
+      }),
     );
 
     await act(async () => {
@@ -202,7 +206,7 @@ describe('useIdempotentTransaction', () => {
         wallet: 'GTEST123',
         action: 'send',
         metadata: { recipient: 'st:xlm:test', amount: '10' },
-      })
+      }),
     );
 
     // First attempt fails
@@ -247,7 +251,7 @@ describe('useIdempotentTransaction', () => {
         chain: 'stellar',
         wallet: 'GTEST123',
         action: 'send',
-      })
+      }),
     );
 
     await act(async () => {
@@ -260,14 +264,14 @@ describe('useIdempotentTransaction', () => {
   it('should handle page reload scenario', async () => {
     // Simulate a pending intent from before page reload
     const { createIntent, updateIntentStatus } = useTransactionIntentStore.getState();
-    
+
     const existingIntentId = createIntent({
       chain: 'stellar',
       wallet: 'GTEST123',
       action: 'send',
       metadata: { recipient: 'st:xlm:test', amount: '10' },
     });
-    
+
     updateIntentStatus(existingIntentId, 'submitting');
 
     // After reload, user tries to submit same transaction again
@@ -279,7 +283,7 @@ describe('useIdempotentTransaction', () => {
         wallet: 'GTEST123',
         action: 'send',
         metadata: { recipient: 'st:xlm:test', amount: '10' },
-      })
+      }),
     );
 
     await act(async () => {

@@ -14,7 +14,7 @@ interface UseIdempotentTransactionReturn {
   intentId: string | null;
   submit: <T>(
     txBuilder: () => Promise<{ txHash: string; result: T }>,
-    options?: { onSuccess?: (result: T) => void; onError?: (error: Error) => void }
+    options?: { onSuccess?: (result: T) => void; onError?: (error: Error) => void },
   ) => Promise<void>;
   reset: () => void;
 }
@@ -42,20 +42,25 @@ export function useIdempotentTransaction(
   const { addEntry: addActivity, updateStatus: updateActivity } = useActivityStore();
 
   const submit = useCallback(
-    async <T,>(
+    async <T>(
       txBuilder: () => Promise<{ txHash: string; result: T }>,
-      options?: { onSuccess?: (result: T) => void; onError?: (error: Error) => void }
+      options?: { onSuccess?: (result: T) => void; onError?: (error: Error) => void },
     ) => {
       // Prevent concurrent submissions from the same component instance
       if (submissionLockRef.current) {
-        console.warn('[IdempotentTx] Submission already in progress, ignoring duplicate call');
+        console.warn(
+          '[IdempotentTx] Submission already in progress, ignoring duplicate call',
+        );
         return;
       }
 
       // Check for existing pending intent with same parameters
       const existingIntent = findPendingIntent(params);
       if (existingIntent) {
-        console.warn('[IdempotentTx] Found existing pending intent, blocking duplicate:', existingIntent.id);
+        console.warn(
+          '[IdempotentTx] Found existing pending intent, blocking duplicate:',
+          existingIntent.id,
+        );
         return;
       }
 
@@ -122,7 +127,16 @@ export function useIdempotentTransaction(
         setIsSubmitting(false);
       }
     },
-    [params, createIntent, updateIntentStatus, setIntentTxHash, getIntent, findPendingIntent, addActivity, updateActivity]
+    [
+      params,
+      createIntent,
+      updateIntentStatus,
+      setIntentTxHash,
+      getIntent,
+      findPendingIntent,
+      addActivity,
+      updateActivity,
+    ],
   );
 
   const reset = useCallback(() => {

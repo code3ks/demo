@@ -107,9 +107,13 @@ export function StellarSend() {
   const paramExp = searchParams.get('exp');
 
   const { address, isConnected, signTransaction, isNetworkMismatch } = useStellarWallet();
-  
+
   // Idempotent transaction submission
-  const { isSubmitting: isIdempotentSubmitting, submit: submitIdempotent, reset: resetIdempotent } = useIdempotentTransaction({
+  const {
+    isSubmitting: isIdempotentSubmitting,
+    submit: submitIdempotent,
+    reset: resetIdempotent,
+  } = useIdempotentTransaction({
     chain: 'stellar',
     wallet: address || '',
     action: 'send',
@@ -650,7 +654,10 @@ export function StellarSend() {
           const freshData = await freshRes.json();
           const freshAccount = new Account(address, freshData.sequence);
 
-          const announceTx = new TransactionBuilder(freshAccount, { fee: '100', networkPassphrase })
+          const announceTx = new TransactionBuilder(freshAccount, {
+            fee: '100',
+            networkPassphrase,
+          })
             .addOperation(
               announcerContract.call(
                 'announce',
@@ -711,7 +718,18 @@ export function StellarSend() {
     );
 
     setIsPending(false);
-  }, [address, recipient, amount, assetKey, signTransaction, t, submitIdempotent, canSubmit, validationError, isNetworkMismatch]);
+  }, [
+    address,
+    recipient,
+    amount,
+    assetKey,
+    signTransaction,
+    t,
+    submitIdempotent,
+    canSubmit,
+    validationError,
+    isNetworkMismatch,
+  ]);
 
   const reset = () => {
     setRecipient(paramTo || '');

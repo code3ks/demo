@@ -1,13 +1,28 @@
 import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
 
-export type IntentStatus = 'pending' | 'signing' | 'submitting' | 'confirmed' | 'failed' | 'abandoned';
+export type IntentStatus =
+  | 'pending'
+  | 'signing'
+  | 'submitting'
+  | 'confirmed'
+  | 'failed'
+  | 'abandoned';
 
 export interface TransactionIntent {
   id: string; // Unique idempotency key (generated from intent parameters)
   chain: string;
   wallet: string;
-  action: 'send' | 'batch-send' | 'batch-withdraw' | 'vault-deposit' | 'vault-claim' | 'name-register' | 'name-transfer' | 'name-renew' | 'name-set-metadata';
+  action:
+    | 'send'
+    | 'batch-send'
+    | 'batch-withdraw'
+    | 'vault-deposit'
+    | 'vault-claim'
+    | 'name-register'
+    | 'name-transfer'
+    | 'name-renew'
+    | 'name-set-metadata';
   status: IntentStatus;
   txHash?: string; // Set after transaction is built/signed
   horizonHash?: string; // Actual hash returned by Horizon
@@ -109,9 +124,7 @@ export const useTransactionIntentStore = create<TransactionIntentState>()(
       updateIntentStatus: (id, status, error) => {
         set((state) => ({
           intents: state.intents.map((intent) =>
-            intent.id === id
-              ? { ...intent, status, error, updatedAt: Date.now() }
-              : intent
+            intent.id === id ? { ...intent, status, error, updatedAt: Date.now() } : intent,
           ),
         }));
       },
@@ -119,9 +132,7 @@ export const useTransactionIntentStore = create<TransactionIntentState>()(
       setIntentTxHash: (id, txHash) => {
         set((state) => ({
           intents: state.intents.map((intent) =>
-            intent.id === id
-              ? { ...intent, txHash, updatedAt: Date.now() }
-              : intent
+            intent.id === id ? { ...intent, txHash, updatedAt: Date.now() } : intent,
           ),
         }));
       },
@@ -129,29 +140,31 @@ export const useTransactionIntentStore = create<TransactionIntentState>()(
       setIntentHorizonHash: (id, horizonHash) => {
         set((state) => ({
           intents: state.intents.map((intent) =>
-            intent.id === id
-              ? { ...intent, horizonHash, updatedAt: Date.now() }
-              : intent
+            intent.id === id ? { ...intent, horizonHash, updatedAt: Date.now() } : intent,
           ),
         }));
       },
 
       findPendingIntent: (params) => {
         const idempotencyKey = generateIdempotencyKey(params);
-        
+
         // Find any intent with same parameters that's still active
         return get().intents.find((intent) => {
-          if (intent.status === 'confirmed' || intent.status === 'failed' || intent.status === 'abandoned') {
+          if (
+            intent.status === 'confirmed' ||
+            intent.status === 'failed' ||
+            intent.status === 'abandoned'
+          ) {
             return false;
           }
-          
+
           const intentKey = generateIdempotencyKey({
             chain: intent.chain,
             wallet: intent.wallet,
             action: intent.action,
             metadata: intent.metadata,
           });
-          
+
           return intentKey === idempotencyKey && Date.now() < intent.expiresAt;
         });
       },
@@ -161,7 +174,11 @@ export const useTransactionIntentStore = create<TransactionIntentState>()(
         set((state) => ({
           intents: state.intents.filter((intent) => {
             // Keep confirmed, failed, or recent intents (last 24 hours)
-            if (intent.status === 'confirmed' || intent.status === 'failed' || intent.status === 'abandoned') {
+            if (
+              intent.status === 'confirmed' ||
+              intent.status === 'failed' ||
+              intent.status === 'abandoned'
+            ) {
               return now - intent.updatedAt < 24 * 60 * 60 * 1000;
             }
             // Mark expired pending/signing/submitting as abandoned
@@ -180,13 +197,13 @@ export const useTransactionIntentStore = create<TransactionIntentState>()(
           intents: state.intents.map((intent) =>
             intent.id === id
               ? { ...intent, status: 'abandoned' as IntentStatus, updatedAt: Date.now() }
-              : intent
+              : intent,
           ),
         }));
       },
-    }),
+    },
     {
       name: 'wraith-transaction-intents',
-    }
-  )
+    },
+  ),
 );
