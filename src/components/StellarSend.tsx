@@ -723,12 +723,16 @@ export function StellarSend() {
     recipient,
     amount,
     assetKey,
+    memo,
     signTransaction,
     t,
     submitIdempotent,
     canSubmit,
     validationError,
     isNetworkMismatch,
+    addToHistory,
+    metaAddress,
+    amountValue,
   ]);
 
   const reset = () => {
