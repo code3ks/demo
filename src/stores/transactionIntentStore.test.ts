@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, vi } from 'vitest';
+import { describe, it, expect, beforeEach, vi, afterEach } from 'vitest';
 import { useTransactionIntentStore } from './transactionIntentStore';
 
 describe('transactionIntentStore', () => {
@@ -14,7 +14,7 @@ describe('transactionIntentStore', () => {
 
   it('should create a new intent', () => {
     const { createIntent, getIntent } = useTransactionIntentStore.getState();
-    
+
     const intentId = createIntent({
       chain: 'stellar',
       wallet: 'GTEST123',
@@ -30,7 +30,7 @@ describe('transactionIntentStore', () => {
 
   it('should prevent duplicate intents with same parameters', () => {
     const { createIntent, getIntent } = useTransactionIntentStore.getState();
-    
+
     const params = {
       chain: 'stellar',
       wallet: 'GTEST123',
@@ -43,7 +43,7 @@ describe('transactionIntentStore', () => {
 
     // Should return same intent ID
     expect(intentId1).toBe(intentId2);
-    
+
     // Should only have one intent
     const { intents } = useTransactionIntentStore.getState();
     expect(intents.length).toBe(1);
@@ -51,7 +51,7 @@ describe('transactionIntentStore', () => {
 
   it('should allow new intent after previous one is confirmed', () => {
     const { createIntent, updateIntentStatus } = useTransactionIntentStore.getState();
-    
+
     const params = {
       chain: 'stellar',
       wallet: 'GTEST123',
@@ -66,14 +66,14 @@ describe('transactionIntentStore', () => {
 
     // Should create new intent
     expect(intentId2).not.toBe(intentId1);
-    
+
     const { intents } = useTransactionIntentStore.getState();
     expect(intents.length).toBe(2);
   });
 
   it('should update intent status', () => {
     const { createIntent, updateIntentStatus, getIntent } = useTransactionIntentStore.getState();
-    
+
     const intentId = createIntent({
       chain: 'stellar',
       wallet: 'GTEST123',
@@ -92,7 +92,7 @@ describe('transactionIntentStore', () => {
 
   it('should set transaction hash', () => {
     const { createIntent, setIntentTxHash, getIntent } = useTransactionIntentStore.getState();
-    
+
     const intentId = createIntent({
       chain: 'stellar',
       wallet: 'GTEST123',
@@ -107,7 +107,7 @@ describe('transactionIntentStore', () => {
 
   it('should cleanup expired intents', () => {
     const { createIntent, cleanupExpired, intents } = useTransactionIntentStore.getState();
-    
+
     const intentId = createIntent({
       chain: 'stellar',
       wallet: 'GTEST123',
@@ -125,7 +125,7 @@ describe('transactionIntentStore', () => {
 
   it('should find pending intent with same parameters', () => {
     const { createIntent, findPendingIntent } = useTransactionIntentStore.getState();
-    
+
     const params = {
       chain: 'stellar',
       wallet: 'GTEST123',
@@ -142,7 +142,7 @@ describe('transactionIntentStore', () => {
 
   it('should not find pending intent with different parameters', () => {
     const { createIntent, findPendingIntent } = useTransactionIntentStore.getState();
-    
+
     createIntent({
       chain: 'stellar',
       wallet: 'GTEST123',
@@ -162,7 +162,7 @@ describe('transactionIntentStore', () => {
 
   it('should abandon intent manually', () => {
     const { createIntent, abandonIntent, getIntent } = useTransactionIntentStore.getState();
-    
+
     const intentId = createIntent({
       chain: 'stellar',
       wallet: 'GTEST123',
@@ -176,7 +176,7 @@ describe('transactionIntentStore', () => {
 
   it('should handle wallet rejection gracefully', () => {
     const { createIntent, updateIntentStatus, getIntent } = useTransactionIntentStore.getState();
-    
+
     const intentId = createIntent({
       chain: 'stellar',
       wallet: 'GTEST123',
@@ -193,7 +193,7 @@ describe('transactionIntentStore', () => {
 
   it('should handle network timeout scenario', () => {
     const { createIntent, updateIntentStatus, getIntent } = useTransactionIntentStore.getState();
-    
+
     const intentId = createIntent({
       chain: 'stellar',
       wallet: 'GTEST123',
@@ -202,10 +202,10 @@ describe('transactionIntentStore', () => {
 
     updateIntentStatus(intentId, 'signing');
     updateIntentStatus(intentId, 'submitting');
-    
+
     // Simulate timeout
     vi.advanceTimersByTime(30 * 1000); // 30 seconds
-    
+
     updateIntentStatus(intentId, 'failed', 'Network timeout');
 
     const intent = getIntent(intentId);
@@ -214,8 +214,9 @@ describe('transactionIntentStore', () => {
   });
 
   it('should prevent duplicate submission during retry', () => {
-    const { createIntent, updateIntentStatus, findPendingIntent } = useTransactionIntentStore.getState();
-    
+    const { createIntent, updateIntentStatus, findPendingIntent } =
+      useTransactionIntentStore.getState();
+
     const params = {
       chain: 'stellar',
       wallet: 'GTEST123',
