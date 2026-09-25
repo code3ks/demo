@@ -41,6 +41,7 @@ import { useActivityStore } from '@/stores/activityStore';
 import { ExpiringNamesBanner } from '@/components/ExpiringNamesBanner';
 import { decodeQrImage, isCameraUnavailableError, parseStellarQrPayload } from '@/utils/qr';
 import { useIdempotentTransaction } from '@/hooks/useIdempotentTransaction';
+import { reconcileStellarTransaction } from '@/lib/stellar/reconcileTransaction';
 const ANNOUNCER_CONTRACT = 'CCJLJ2QRBJAAKIG6ELNQVXLLWMKKWVN5O2FKWUETHZGMPAD4MHK7WVWL';
 const STELLAR_BASE_FEE_XLM = 0.00001;
 const STELLAR_BASE_RESERVE_XLM = 1;
@@ -637,6 +638,7 @@ export function StellarSend() {
           setRetryStatus('');
           setError(error.message);
         },
+        reconcile: reconcileStellarTransaction,
       }
     );
     setIsPending(false);
