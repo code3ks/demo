@@ -293,4 +293,74 @@ describe('useIdempotentTransaction', () => {
     // Should be blocked by existing pending intent
     expect(mockTxBuilder).not.toHaveBeenCalled();
   });
+
+  it('should reconcile sent-but-timeout transactions', async () => {
+    const mockTxHash = 'tx_timeout123';
+    const mockTxBuilder = vi.fn().mockImplementation(async () => {
+      // Simulate transaction being sent but client timing out
+      throw new Error('Network timeout');
+    });
+
+    // Mock reconcile function that checks Horizon and finds the transaction succeeded
+    const mockReconcile = vi.fn().mockResolvedValue(true);
+
+    const { result } = renderHook(() =>
+      useIdempotentTransaction({
+        chain: 'stellar',
+        wallet: 'GTEST123',
+        action: 'send',
+        metadata: { recipient: 'st:xlm:test', amount: '10' },
+      }),
+    );
+
+    // Mock txBuilder to set txHash before throwing
+    const mockTxBuilderWithHash = vi.fn().mockImplementation(async () => {
+      // Transaction was actually sent to network
+      return Promise.reject(new Error('Network timeout')).catch((err) => {
+        // But we got the hash before timeout
+        return Promise.resolve({
+          txHash: mockTxHash,
+          result: {},
+        }).then(() => Promise.reject(err));
+      });
+    });
+
+    // Actually, let's simulate it properly
+    mockTxBuilder.mockImplementation(async () => {
+      // Build transaction and get hash
+      const txHash = mockTxHash;
+      // Submit to network (this succeeds)
+      // But then client times out waiting for response
+      throw new Error('Network timeout');
+    });
+
+    await act(async () => {
+      // This should fail with timeout, but the transaction actually went through
+      await result.current.submit(
+        async () => {
+          const txHash = mockTxHash;
+          // Simulate: transaction submitted but response timed out
+          await new Promise((_, reject) =>
+            setTimeout(() => reject(new Error('Network timeout')), 100),
+          );
+          return { txHash, result: { success: true } };
+        },
+        {
+          reconcile: mockReconcile,
+          onSuccess: () => {},
+          onError: () => {},
+        },
+      );
+    });
+
+    // Reconcile function should have been called
+    expect(mockReconcile).toHaveBeenCalledWith(mockTxHash);
+
+    // Intent and activity should be marked as confirmed (not failed)
+    const { intents } = useTransactionIntentStore.getState();
+    expect(intents[0].status).toBe('confirmed');
+
+    const { entries } = useActivityStore.getState();
+    expect(entries[0].status).toBe('confirmed');
+  });
 });

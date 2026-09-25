@@ -194,19 +194,30 @@ pnpm test:unit useIdempotentTransaction.test
 
 3. **Network Timeout:**
    - Intent marked as `failed` with error message
+   - **Timeout Reconciliation**: If transaction has a hash, reconcile function checks Horizon
+   - If transaction succeeded on Horizon despite timeout, status updated to `confirmed`
+   - Prevents duplicate submission of transactions that succeeded but client timed out
    - User can retry with reset
 
-4. **Page Reload During Submission:**
+4. **Sent-But-Timeout Scenario:**
+   - Transaction submitted to Horizon successfully
+   - Client times out waiting for response
+   - Reconcile function queries Horizon for transaction status
+   - If found and successful, intent/activity marked as `confirmed`
+   - If not found or failed, intent/activity marked as `failed`
+   - Prevents false negatives where transaction succeeded but client thought it failed
+
+5. **Page Reload During Submission:**
    - Persisted intents prevent re-submission
    - Expired intents (>5 min) auto-abandoned
 
-5. **Wallet Rejection:**
+6. **Wallet Rejection:**
    - Intent marked as `failed`
    - User can retry after reset
 
-6. **Transaction Built But Submission Failed:**
+7. **Transaction Built But Submission Failed:**
    - Transaction hash recorded in intent
-   - Activity store updated to failed status
+   - Activity store updated to failed status (after reconciliation attempt)
 
 ## Migration Guide
 
