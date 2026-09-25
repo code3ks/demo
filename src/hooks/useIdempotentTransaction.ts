@@ -14,7 +14,11 @@ interface UseIdempotentTransactionReturn {
   intentId: string | null;
   submit: <T>(
     txBuilder: () => Promise<{ txHash: string; result: T }>,
-    options?: { onSuccess?: (result: T) => void; onError?: (error: Error) => void },
+    options?: {
+      onSuccess?: (result: T) => void;
+      onError?: (error: Error) => void;
+      reconcile?: (txHash: string) => Promise<boolean>;
+    },
   ) => Promise<void>;
   reset: () => void;
 }
@@ -24,24 +28,30 @@ interface UseIdempotentTransactionReturn {
  * Prevents double submissions and reconciles pending intents with confirmed transactions
  */
 export function useIdempotentTransaction(
-  params: UseIdempotentTransactionParams
+  params: UseIdempotentTransactionParams,
 ): UseIdempotentTransactionReturn {
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [intentId, setIntentId] = useState<string | null>(null);
   const submissionLockRef = useRef(false);
+
   const {
     createIntent,
     getIntent,
     updateIntentStatus,
     setIntentTxHash,
-    setIntentHorizonHash,
     findPendingIntent,
   } = useTransactionIntentStore();
+
   const { addEntry: addActivity, updateStatus: updateActivity } = useActivityStore();
+
   const submit = useCallback(
     async <T>(
       txBuilder: () => Promise<{ txHash: string; result: T }>,
-      options?: { onSuccess?: (result: T) => void; onError?: (error: Error) => void },
+      options?: {
+        onSuccess?: (result: T) => void;
+        onError?: (error: Error) => void;
+        reconcile?: (txHash: string) => Promise<boolean>;
+      },
     ) => {
       // Prevent concurrent submissions from the same component instance
       if (submissionLockRef.current) {
@@ -50,6 +60,7 @@ export function useIdempotentTransaction(
         );
         return;
       }
+
       // Check for existing pending intent with same parameters
       const existingIntent = findPendingIntent(params);
       if (existingIntent) {
@@ -59,18 +70,27 @@ export function useIdempotentTransaction(
         );
         return;
       }
+
       submissionLockRef.current = true;
       setIsSubmitting(true);
+
       // Create new intent
       const newIntentId = createIntent(params);
       setIntentId(newIntentId);
+
+      let txHash: string | undefined;
+
       try {
         // Update intent to signing
         updateIntentStatus(newIntentId, 'signing');
+
         // Build and sign transaction (this may throw if user rejects)
-        const { txHash, result } = await txBuilder();
+        const { txHash: builtTxHash, result } = await txBuilder();
+        txHash = builtTxHash;
+
         // Update intent with txHash
         setIntentTxHash(newIntentId, txHash);
+
         // Add to activity store
         addActivity({
           id: txHash,
@@ -82,25 +102,55 @@ export function useIdempotentTransaction(
           timestamp: Date.now(),
           metadata: { intentId: newIntentId },
         });
+
         // Update intent to submitting
         updateIntentStatus(newIntentId, 'submitting');
+
         // Transaction is now submitted, mark as confirmed
         updateIntentStatus(newIntentId, 'confirmed');
         updateActivity(txHash, 'confirmed');
+
         if (options?.onSuccess) {
           options.onSuccess(result);
         }
       } catch (error) {
         const err = error as Error;
         console.error('[IdempotentTx] Transaction failed:', err);
+
+        // If we have a txHash and a reconcile function, check if the transaction actually succeeded
+        if (txHash && options?.reconcile) {
+          try {
+            console.log('[IdempotentTx] Attempting to reconcile transaction:', txHash);
+            const isConfirmed = await options.reconcile(txHash);
+
+            if (isConfirmed) {
+              // Transaction succeeded despite client-side timeout/error
+              console.log('[IdempotentTx] Transaction reconciled as confirmed:', txHash);
+              updateIntentStatus(newIntentId, 'confirmed');
+              updateActivity(txHash, 'confirmed');
+
+              if (options?.onSuccess) {
+                // Call success with a reconciled result
+                options.onSuccess({} as T);
+              }
+              return;
+            }
+          } catch (reconcileError) {
+            console.error('[IdempotentTx] Reconciliation failed:', reconcileError);
+            // Continue to mark as failed
+          }
+        }
+
         // Update intent as failed
         updateIntentStatus(newIntentId, 'failed', err.message);
+
         // Get the intent to check if we have a txHash
         const intent = getIntent(newIntentId);
         if (intent?.txHash) {
           // Transaction was built but submission failed
           updateActivity(intent.txHash, 'failed');
         }
+
         if (options?.onError) {
           options.onError(err);
         } else {
@@ -122,11 +172,13 @@ export function useIdempotentTransaction(
       updateActivity,
     ],
   );
+
   const reset = useCallback(() => {
     setIntentId(null);
     setIsSubmitting(false);
     submissionLockRef.current = false;
   }, []);
+
   return {
     isSubmitting,
     intentId,
@@ -134,6 +186,7 @@ export function useIdempotentTransaction(
     reset,
   };
 }
+
 // Helper to map action to ActivityKind
 function getActivityKind(action: TransactionIntent['action']) {
   switch (action) {
@@ -155,6 +208,7 @@ function getActivityKind(action: TransactionIntent['action']) {
       return 'stealth-send' as const;
   }
 }
+
 // Helper to map action to ActivityDirection
 function getActivityDirection(action: TransactionIntent['action']) {
   switch (action) {
