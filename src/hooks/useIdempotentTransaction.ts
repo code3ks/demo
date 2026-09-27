@@ -34,13 +34,8 @@ export function useIdempotentTransaction(
   const [intentId, setIntentId] = useState<string | null>(null);
   const submissionLockRef = useRef(false);
 
-  const {
-    createIntent,
-    getIntent,
-    updateIntentStatus,
-    setIntentTxHash,
-    findPendingIntent,
-  } = useTransactionIntentStore();
+  const { createIntent, getIntent, updateIntentStatus, setIntentTxHash, findPendingIntent } =
+    useTransactionIntentStore();
 
   const { addEntry: addActivity, updateStatus: updateActivity } = useActivityStore();
 
@@ -55,9 +50,7 @@ export function useIdempotentTransaction(
     ) => {
       // Prevent concurrent submissions from the same component instance
       if (submissionLockRef.current) {
-        console.warn(
-          '[IdempotentTx] Submission already in progress, ignoring duplicate call',
-        );
+        console.warn('[IdempotentTx] Submission already in progress, ignoring duplicate call');
         return;
       }
 

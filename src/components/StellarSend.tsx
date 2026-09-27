@@ -504,7 +504,11 @@ export function StellarSend() {
         const networkPassphrase = STELLAR_NETWORK.networkPassphrase;
         const currentAssetInfo = getAssetByKey(assetKey);
         const sendAsset = currentAssetInfo.toAsset();
-        const accountRes = await fetchWithRetry(`${horizonUrl}/accounts/${address}`, {}, { onRetry });
+        const accountRes = await fetchWithRetry(
+          `${horizonUrl}/accounts/${address}`,
+          {},
+          { onRetry },
+        );
         setRetryStatus('');
         if (!accountRes.ok) throw new Error('Failed to load sender account');
         const accountData = (await accountRes.json()) as HorizonAccount;
@@ -577,7 +581,11 @@ export function StellarSend() {
           const soroban =
             (window as any).sorobanServerMock || new rpcMod.Server(STELLAR_NETWORK.rpcUrl);
           const announcerContract = new Contract(ANNOUNCER_CONTRACT);
-          const freshRes = await fetchWithRetry(`${horizonUrl}/accounts/${address}`, {}, { onRetry });
+          const freshRes = await fetchWithRetry(
+            `${horizonUrl}/accounts/${address}`,
+            {},
+            { onRetry },
+          );
           setRetryStatus('');
           const freshData = await freshRes.json();
           const freshAccount = new Account(address, freshData.sequence);
@@ -596,9 +604,12 @@ export function StellarSend() {
             )
             .setTimeout(30)
             .build();
-          const simulated: unknown = await withRetry(() => soroban.simulateTransaction(announceTx), {
-            onRetry,
-          });
+          const simulated: unknown = await withRetry(
+            () => soroban.simulateTransaction(announceTx),
+            {
+              onRetry,
+            },
+          );
           setRetryStatus('');
           if (
             simulated &&
@@ -639,7 +650,7 @@ export function StellarSend() {
           setError(error.message);
         },
         reconcile: reconcileStellarTransaction,
-      }
+      },
     );
     setIsPending(false);
   }, [
