@@ -53,6 +53,16 @@ interface TransactionIntentState {
   }) => TransactionIntent | undefined;
   cleanupExpired: () => void;
   abandonIntent: (id: string) => void;
+  /**
+   * On app reload, reconcile every intent that has a txHash but is still
+   * in 'submitting' state (i.e. the tab was closed/crashed after signing but
+   * before a definitive Horizon response).  Returns the number of intents
+   * whose status was updated.
+   */
+  reconcilePendingOnMount: (
+    reconcileFn: (txHash: string) => Promise<boolean | null>,
+    updateActivityStatus: (id: string, status: 'confirmed' | 'failed') => void,
+  ) => Promise<number>;
 }
 
 // Generate deterministic idempotency key from intent parameters
@@ -200,6 +210,40 @@ export const useTransactionIntentStore = create<TransactionIntentState>()(
               : intent,
           ),
         }));
+      },
+
+      reconcilePendingOnMount: async (reconcileFn, updateActivityStatus) => {
+        // Only reconcile intents that were actively submitting (have a txHash)
+        // when the page was last closed.  Pure 'signing' intents with no hash
+        // cannot be reconciled and are left for cleanupExpired to abandon.
+        const candidates = get().intents.filter(
+          (i) => (i.status === 'submitting' || i.status === 'signing') && i.txHash,
+        );
+
+        let updated = 0;
+
+        for (const intent of candidates) {
+          const txHash = intent.txHash!;
+          try {
+            const result = await reconcileFn(txHash);
+
+            if (result === true) {
+              get().updateIntentStatus(intent.id, 'confirmed');
+              updateActivityStatus(txHash, 'confirmed');
+              updated++;
+            } else if (result === false) {
+              // Definitively absent — mark failed so the user can resubmit
+              get().updateIntentStatus(intent.id, 'failed', 'Transaction not found on Horizon');
+              updateActivityStatus(txHash, 'failed');
+              updated++;
+            }
+            // null means Horizon unavailable — leave as-is so pollPending retries later
+          } catch {
+            // Ignore per-intent errors; move on to the next
+          }
+        }
+
+        return updated;
       },
     }),
     {

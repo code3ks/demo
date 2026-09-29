@@ -35,7 +35,7 @@ interface UseIdempotentTransactionReturn {
     options?: {
       onSuccess?: (result: T) => void;
       onError?: (error: Error) => void;
-      reconcile?: (txHash: string) => Promise<boolean>;
+      reconcile?: (txHash: string) => Promise<boolean | null>;
     },
   ) => Promise<void>;
   reset: () => void;
@@ -67,7 +67,7 @@ export function useIdempotentTransaction(
       options?: {
         onSuccess?: (result: T) => void;
         onError?: (error: Error) => void;
-        reconcile?: (txHash: string) => Promise<boolean>;
+        reconcile?: (txHash: string) => Promise<boolean | null>;
       },
     ) => {
       // Prevent concurrent submissions from the same component instance
@@ -132,12 +132,18 @@ export function useIdempotentTransaction(
         if (txHash && options?.reconcile) {
           try {
             console.log('[IdempotentTx] Reconciling:', txHash);
-            const confirmed = await options.reconcile(txHash);
-            if (confirmed) {
+            const reconcileResult = await options.reconcile(txHash);
+            if (reconcileResult === true) {
               console.log('[IdempotentTx] Reconciled as confirmed:', txHash);
               updateIntentStatus(newIntentId, 'confirmed');
               updateActivity(txHash, 'confirmed');
               options?.onSuccess?.({} as T);
+              return;
+            }
+            if (reconcileResult === null) {
+              // Horizon unavailable — keep intent pending for next poll
+              console.warn('[IdempotentTx] Horizon unavailable, keeping intent pending:', txHash);
+              updateIntentStatus(newIntentId, 'submitting');
               return;
             }
           } catch (reconcileError) {
