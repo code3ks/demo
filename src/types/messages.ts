@@ -224,15 +224,6 @@ export type BroadcastChannelMessage =
 // ═══════════════════════════════════════════════════════════════════════════
 
 /**
- * Scan strategy configuration
- */
-export interface ScanStrategy {
-  batchSize?: number;
-  maxBatches?: number;
-  [key: string]: unknown;
-}
-
-/**
  * Request to scan blockchain announcements
  */
 export interface ScanRequestMessage {
@@ -243,7 +234,7 @@ export interface ScanRequestMessage {
   viewingKey: Uint8Array;
   spendingPubKey: Uint8Array;
   spendingScalar: bigint;
-  strategy?: ScanStrategy;
+  strategy?: 'fast' | 'balanced' | 'full';
 }
 
 /**

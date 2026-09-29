@@ -3,11 +3,7 @@ import type { Announcement } from '@wraith-protocol/sdk/chains/stellar';
 import { Address, xdr } from '@stellar/stellar-sdk';
 import { scanWithStrategy, DEFAULT_SCAN_STRATEGY, type ScanStrategy } from './stellarScanDispatch';
 import { retentionErrorFromRpcMessage, retentionGapFromError } from '../lib/stellar/scannerCursor';
-import {
-  validateWebWorkerMessage,
-  createMessage,
-  type WebWorkerMessage,
-} from '../types/messages';
+import { validateWebWorkerMessage, createMessage, type WebWorkerMessage } from '../types/messages';
 
 function parseLedgerRange(message: string): { oldest: number; latest: number } | undefined {
   const match = message.match(/range:\s*(\d+)\s*-\s*(\d+)/i);
@@ -177,14 +173,8 @@ self.onmessage = async (e: MessageEvent) => {
     return;
   }
 
-  const {
-    rpcUrl,
-    announcerContract,
-    viewingKey,
-    spendingPubKey,
-    spendingScalar,
-    strategy,
-  } = message;
+  const { rpcUrl, announcerContract, viewingKey, spendingPubKey, spendingScalar, strategy } =
+    message;
 
   const startLedger = (message as any).startLedger;
 
@@ -211,9 +201,7 @@ self.onmessage = async (e: MessageEvent) => {
   } catch (err) {
     const retentionGap = retentionGapFromError(err);
     if (retentionGap) {
-      self.postMessage(
-        createMessage({ type: 'RETENTION_GAP' as const, ...retentionGap }),
-      );
+      self.postMessage(createMessage({ type: 'RETENTION_GAP' as const, ...retentionGap }));
       return;
     }
     self.postMessage(
