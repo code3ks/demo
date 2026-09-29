@@ -18,6 +18,7 @@ interface UseIdempotentTransactionReturn {
       onSuccess?: (result: T) => void;
       onError?: (error: Error) => void;
       reconcile?: (txHash: string) => Promise<boolean>;
+      onTxHashReady?: (txHash: string) => void;
     },
   ) => Promise<void>;
   reset: () => void;
@@ -72,6 +73,7 @@ export function useIdempotentTransaction(
       setIntentId(newIntentId);
 
       let txHash: string | undefined;
+      let txHashCaptured = false;
 
       try {
         // Update intent to signing
@@ -80,8 +82,10 @@ export function useIdempotentTransaction(
         // Build and sign transaction (this may throw if user rejects)
         const { txHash: builtTxHash, result } = await txBuilder();
         txHash = builtTxHash;
+        txHashCaptured = true;
 
-        // Update intent with txHash
+        // CRITICAL: Store txHash immediately before any network calls
+        // This ensures we can reconcile even if the network times out
         setIntentTxHash(newIntentId, txHash);
 
         // Add to activity store
@@ -110,8 +114,8 @@ export function useIdempotentTransaction(
         const err = error as Error;
         console.error('[IdempotentTx] Transaction failed:', err);
 
-        // If we have a txHash and a reconcile function, check if the transaction actually succeeded
-        if (txHash && options?.reconcile) {
+        // If we captured txHash (even if submission failed) and have reconcile function
+        if (txHashCaptured && txHash && options?.reconcile) {
           try {
             console.log('[IdempotentTx] Attempting to reconcile transaction:', txHash);
             const isConfirmed = await options.reconcile(txHash);
@@ -137,11 +141,9 @@ export function useIdempotentTransaction(
         // Update intent as failed
         updateIntentStatus(newIntentId, 'failed', err.message);
 
-        // Get the intent to check if we have a txHash
-        const intent = getIntent(newIntentId);
-        if (intent?.txHash) {
-          // Transaction was built but submission failed
-          updateActivity(intent.txHash, 'failed');
+        // If we have a txHash (transaction was built but submission failed)
+        if (txHashCaptured && txHash) {
+          updateActivity(txHash, 'failed');
         }
 
         if (options?.onError) {

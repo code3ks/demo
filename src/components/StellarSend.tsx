@@ -95,6 +95,8 @@ export function StellarSend() {
   const paramMemo = searchParams.get('memo');
   const paramExp = searchParams.get('exp');
   const { address, isConnected, signTransaction, isNetworkMismatch } = useStellarWallet();
+  const { addEntry: addActivity } = useActivityStore();
+
   // Idempotent transaction submission
   const {
     isSubmitting: isIdempotentSubmitting,
@@ -559,6 +561,20 @@ export function StellarSend() {
         const signedXdr = await signTransaction(classicTx.toXDR());
         const txHashHex = classicTx.hash().toString('hex');
         setTxHash(txHashHex);
+
+        // CRITICAL: Persist txHash in activity store BEFORE network submission
+        // This enables reconciliation even if the network times out
+        addActivity({
+          id: txHashHex,
+          chain: 'stellar',
+          wallet: address,
+          kind: 'stealth-send',
+          direction: 'out',
+          status: 'pending',
+          timestamp: Date.now(),
+          metadata: { recipient },
+        });
+
         const submitRes = await fetch(`${horizonUrl}/transactions`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
