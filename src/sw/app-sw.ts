@@ -384,20 +384,14 @@ self.addEventListener('message', (event) => {
     return;
   }
 
-  const { publicKey, encryptedViewingKey, encryptedSpendingPubKey, encryptedSpendingScalar } =
-    message as any;
-
   if (type === 'RECOVER_SCAN_CURSOR') {
+    const { publicKey, oldestAvailableLedger } = message;
     event.waitUntil(
       (async () => {
         const db = await openDB();
         try {
-          const recoveryLedger = Number((message as any).oldestAvailableLedger);
-          if (
-            typeof publicKey !== 'string' ||
-            !Number.isSafeInteger(recoveryLedger) ||
-            recoveryLedger <= 0
-          ) {
+          const recoveryLedger = Number(oldestAvailableLedger);
+          if (!Number.isSafeInteger(recoveryLedger) || recoveryLedger <= 0) {
             return;
           }
           const storedKey = await new Promise<StoredViewingKey | undefined>((resolve, reject) => {
@@ -428,6 +422,8 @@ self.addEventListener('message', (event) => {
   }
 
   if (type === 'REGISTER_VIEWING_KEY') {
+    const { publicKey, encryptedViewingKey, encryptedSpendingPubKey, encryptedSpendingScalar } =
+      message;
     event.waitUntil(
       (async () => {
         try {
@@ -514,10 +510,10 @@ self.addEventListener('message', (event) => {
 
   // Push subscription management
   if (type === 'REGISTER_PUSH_SUBSCRIPTION') {
+    const { subscription, metaAddressHash, relayUrl } = message;
     event.waitUntil(
       (async () => {
         try {
-          const { subscription, metaAddressHash, relayUrl } = message as any;
           if (!subscription || !metaAddressHash) {
             throw new Error('Missing subscription or metaAddressHash');
           }
@@ -573,10 +569,10 @@ self.addEventListener('message', (event) => {
   }
 
   if (type === 'UNREGISTER_PUSH_SUBSCRIPTION') {
+    const { subscription } = message;
     event.waitUntil(
       (async () => {
         try {
-          const { subscription, metaAddressHash } = message as any;
           if (!subscription) {
             throw new Error('Missing subscription');
           }

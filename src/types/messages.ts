@@ -77,6 +77,17 @@ export interface SkipWaitingMessage {
 }
 
 /**
+ * Message to recover a scanner cursor after a Horizon retention gap.
+ * The page sends this after receiving a STELLAR_SCAN_RETENTION_GAP broadcast.
+ */
+export interface RecoverScanCursorMessage {
+  type: 'RECOVER_SCAN_CURSOR';
+  version: typeof PROTOCOL_VERSION;
+  publicKey: string;
+  oldestAvailableLedger: number;
+}
+
+/**
  * Response: Viewing key registered successfully
  */
 export interface ViewingKeyRegisteredMessage {
@@ -135,7 +146,28 @@ export type ServiceWorkerInboundMessage =
   | TriggerScanMessage
   | RegisterPushSubscriptionMessage
   | UnregisterPushSubscriptionMessage
-  | SkipWaitingMessage;
+  | SkipWaitingMessage
+  | RecoverScanCursorMessage;
+
+/**
+ * SW→page broadcast: scanner hit a ledger retention gap
+ */
+export interface StellarScanRetentionGapMessage {
+  type: 'STELLAR_SCAN_RETENTION_GAP';
+  version: typeof PROTOCOL_VERSION;
+  publicKey: string;
+  oldestAvailableLedger: number;
+  requestedLedger: number;
+}
+
+/**
+ * SW→page broadcast: cursor recovery completed after a retention gap
+ */
+export interface StellarScanRecoveryCompleteMessage {
+  type: 'STELLAR_SCAN_RECOVERY_COMPLETE';
+  version: typeof PROTOCOL_VERSION;
+  publicKey: string;
+}
 
 /**
  * Union of all messages sent FROM service worker TO page
@@ -146,7 +178,9 @@ export type ServiceWorkerOutboundMessage =
   | ViewingKeyErrorMessage
   | PushSubscriptionRegisteredMessage
   | PushSubscriptionUnregisteredMessage
-  | PushSubscriptionErrorMessage;
+  | PushSubscriptionErrorMessage
+  | StellarScanRetentionGapMessage
+  | StellarScanRecoveryCompleteMessage;
 
 // ═══════════════════════════════════════════════════════════════════════════
 // BroadcastChannel Messages (Cross-tab Wallet Sync)
@@ -289,11 +323,8 @@ function hasBaseProperties(msg: unknown): msg is { type: string; version?: strin
  */
 function isVersionCompatible(version: string | undefined): boolean {
   if (!version) {
-    // Allow messages without version for backward compatibility
-    console.warn(
-      '[Protocol] Received message without version, allowing for backward compatibility',
-    );
-    return true;
+    // Missing version is now rejected — all callers must send a versioned message
+    return false;
   }
 
   // Extract major version
@@ -317,7 +348,7 @@ export function validateServiceWorkerInboundMessage(
   if (!isVersionCompatible(msg.version)) {
     return {
       valid: false,
-      error: `Incompatible protocol version: received ${msg.version}, expected ${PROTOCOL_VERSION}`,
+      error: `Incompatible protocol version: received ${msg.version ?? 'none'}, expected ${PROTOCOL_VERSION}`,
     };
   }
 
@@ -328,42 +359,88 @@ export function validateServiceWorkerInboundMessage(
     'REGISTER_PUSH_SUBSCRIPTION',
     'UNREGISTER_PUSH_SUBSCRIPTION',
     'SKIP_WAITING',
+    'RECOVER_SCAN_CURSOR',
   ];
 
   if (!validTypes.includes(msg.type)) {
     return { valid: false, error: `Unknown message type: ${msg.type}` };
   }
 
-  // Type-specific validation
+  // Type-specific payload validation
   switch (msg.type) {
     case 'REGISTER_VIEWING_KEY': {
-      const required = [
-        'publicKey',
+      const m = msg as Record<string, unknown>;
+      if (typeof m.publicKey !== 'string' || !m.publicKey) {
+        return {
+          valid: false,
+          error: 'REGISTER_VIEWING_KEY: publicKey must be a non-empty string',
+        };
+      }
+      for (const field of [
         'encryptedViewingKey',
         'encryptedSpendingPubKey',
         'encryptedSpendingScalar',
-      ];
-      for (const field of required) {
-        if (!(field in msg)) {
-          return { valid: false, error: `Missing required field: ${field}` };
+      ]) {
+        if (!(field in m)) {
+          return { valid: false, error: `REGISTER_VIEWING_KEY: missing required field: ${field}` };
         }
       }
       break;
     }
     case 'UNREGISTER_VIEWING_KEY': {
-      if (!('publicKey' in msg) || typeof (msg as { publicKey: unknown }).publicKey !== 'string') {
-        return { valid: false, error: 'Missing or invalid publicKey' };
+      const m = msg as Record<string, unknown>;
+      if (typeof m.publicKey !== 'string' || !m.publicKey) {
+        return {
+          valid: false,
+          error: 'UNREGISTER_VIEWING_KEY: publicKey must be a non-empty string',
+        };
       }
       break;
     }
-    case 'REGISTER_PUSH_SUBSCRIPTION':
+    case 'REGISTER_PUSH_SUBSCRIPTION': {
+      const m = msg as Record<string, unknown>;
+      if (!m.subscription || typeof m.subscription !== 'object') {
+        return {
+          valid: false,
+          error: 'REGISTER_PUSH_SUBSCRIPTION: subscription must be an object',
+        };
+      }
+      if (typeof m.metaAddressHash !== 'string' || !m.metaAddressHash) {
+        return {
+          valid: false,
+          error: 'REGISTER_PUSH_SUBSCRIPTION: metaAddressHash must be a non-empty string',
+        };
+      }
+      break;
+    }
     case 'UNREGISTER_PUSH_SUBSCRIPTION': {
-      if (!('subscription' in msg)) {
-        return { valid: false, error: 'Missing required field: subscription' };
+      const m = msg as Record<string, unknown>;
+      if (!m.subscription || typeof m.subscription !== 'object') {
+        return {
+          valid: false,
+          error: 'UNREGISTER_PUSH_SUBSCRIPTION: subscription must be an object',
+        };
       }
       break;
     }
-    // TRIGGER_SCAN and SKIP_WAITING have no additional requirements
+    case 'RECOVER_SCAN_CURSOR': {
+      const m = msg as Record<string, unknown>;
+      if (typeof m.publicKey !== 'string' || !m.publicKey) {
+        return { valid: false, error: 'RECOVER_SCAN_CURSOR: publicKey must be a non-empty string' };
+      }
+      if (
+        typeof m.oldestAvailableLedger !== 'number' ||
+        !Number.isInteger(m.oldestAvailableLedger) ||
+        m.oldestAvailableLedger < 1
+      ) {
+        return {
+          valid: false,
+          error: 'RECOVER_SCAN_CURSOR: oldestAvailableLedger must be a positive integer',
+        };
+      }
+      break;
+    }
+    // TRIGGER_SCAN and SKIP_WAITING have no payload fields
   }
 
   return { valid: true, message: msg as ServiceWorkerInboundMessage };
@@ -382,7 +459,7 @@ export function validateServiceWorkerOutboundMessage(
   if (!isVersionCompatible(msg.version)) {
     return {
       valid: false,
-      error: `Incompatible protocol version: received ${msg.version}, expected ${PROTOCOL_VERSION}`,
+      error: `Incompatible protocol version: received ${msg.version ?? 'none'}, expected ${PROTOCOL_VERSION}`,
     };
   }
 
@@ -393,16 +470,45 @@ export function validateServiceWorkerOutboundMessage(
     'PUSH_SUBSCRIPTION_REGISTERED',
     'PUSH_SUBSCRIPTION_UNREGISTERED',
     'PUSH_SUBSCRIPTION_ERROR',
+    'STELLAR_SCAN_RETENTION_GAP',
+    'STELLAR_SCAN_RECOVERY_COMPLETE',
   ];
 
   if (!validTypes.includes(msg.type)) {
     return { valid: false, error: `Unknown message type: ${msg.type}` };
   }
 
-  // Error messages must have error field
-  if (msg.type.includes('ERROR')) {
-    if (!('error' in msg) || typeof (msg as { error: unknown }).error !== 'string') {
-      return { valid: false, error: 'Error messages must include error field' };
+  const m = msg as Record<string, unknown>;
+
+  // Error messages must have an error string
+  if (msg.type === 'VIEWING_KEY_ERROR' || msg.type === 'PUSH_SUBSCRIPTION_ERROR') {
+    if (typeof m.error !== 'string') {
+      return { valid: false, error: `${msg.type}: error must be a string` };
+    }
+  }
+
+  if (msg.type === 'STELLAR_SCAN_RETENTION_GAP') {
+    if (typeof m.publicKey !== 'string' || !m.publicKey) {
+      return {
+        valid: false,
+        error: 'STELLAR_SCAN_RETENTION_GAP: publicKey must be a non-empty string',
+      };
+    }
+    if (typeof m.oldestAvailableLedger !== 'number' || typeof m.requestedLedger !== 'number') {
+      return {
+        valid: false,
+        error:
+          'STELLAR_SCAN_RETENTION_GAP: oldestAvailableLedger and requestedLedger must be numbers',
+      };
+    }
+  }
+
+  if (msg.type === 'STELLAR_SCAN_RECOVERY_COMPLETE') {
+    if (typeof m.publicKey !== 'string' || !m.publicKey) {
+      return {
+        valid: false,
+        error: 'STELLAR_SCAN_RECOVERY_COMPLETE: publicKey must be a non-empty string',
+      };
     }
   }
 
@@ -422,7 +528,7 @@ export function validateBroadcastChannelMessage(
   if (!isVersionCompatible(msg.version)) {
     return {
       valid: false,
-      error: `Incompatible protocol version: received ${msg.version}, expected ${PROTOCOL_VERSION}`,
+      error: `Incompatible protocol version: received ${msg.version ?? 'none'}, expected ${PROTOCOL_VERSION}`,
     };
   }
 
@@ -488,7 +594,7 @@ export function validateWebWorkerMessage(
   if (!isVersionCompatible(msg.version)) {
     return {
       valid: false,
-      error: `Incompatible protocol version: received ${msg.version}, expected ${PROTOCOL_VERSION}`,
+      error: `Incompatible protocol version: received ${msg.version ?? 'none'}, expected ${PROTOCOL_VERSION}`,
     };
   }
 

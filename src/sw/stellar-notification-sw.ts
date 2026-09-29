@@ -351,20 +351,19 @@ self.addEventListener('message', (event: ExtendableMessageEvent) => {
   const message = validation.message!;
   const { type } = message;
 
-  const { publicKey, encryptedViewingKey, encryptedSpendingPubKey, encryptedSpendingScalar } =
-    message as any;
+  if (type === 'SKIP_WAITING') {
+    self.skipWaiting();
+    return;
+  }
 
   if (type === 'RECOVER_SCAN_CURSOR') {
+    const { publicKey, oldestAvailableLedger } = message;
     event.waitUntil(
       (async () => {
         const db = await openDB();
         try {
-          const recoveryLedger = Number((message as any).oldestAvailableLedger);
-          if (
-            typeof publicKey !== 'string' ||
-            !Number.isSafeInteger(recoveryLedger) ||
-            recoveryLedger <= 0
-          ) {
+          const recoveryLedger = Number(oldestAvailableLedger);
+          if (!Number.isSafeInteger(recoveryLedger) || recoveryLedger <= 0) {
             return;
           }
           const storedKey = await new Promise<StoredViewingKey | undefined>((resolve, reject) => {
@@ -395,6 +394,8 @@ self.addEventListener('message', (event: ExtendableMessageEvent) => {
   }
 
   if (type === 'REGISTER_VIEWING_KEY') {
+    const { publicKey, encryptedViewingKey, encryptedSpendingPubKey, encryptedSpendingScalar } =
+      message;
     event.waitUntil(
       (async () => {
         try {
@@ -403,9 +404,9 @@ self.addEventListener('message', (event: ExtendableMessageEvent) => {
           const store = transaction.objectStore(STORE_NAME);
           const entry: StoredViewingKey = {
             publicKey,
-            encryptedViewingKey,
-            encryptedSpendingPubKey,
-            encryptedSpendingScalar,
+            encryptedViewingKey: encryptedViewingKey as unknown as string,
+            encryptedSpendingPubKey: encryptedSpendingPubKey as unknown as string,
+            encryptedSpendingScalar: encryptedSpendingScalar as unknown as string,
             timestamp: Date.now(),
           };
           await new Promise<void>((resolve, reject) => {
@@ -433,6 +434,7 @@ self.addEventListener('message', (event: ExtendableMessageEvent) => {
   }
 
   if (type === 'UNREGISTER_VIEWING_KEY') {
+    const { publicKey } = message;
     event.waitUntil(
       (async () => {
         try {
@@ -483,10 +485,10 @@ self.addEventListener('message', (event: ExtendableMessageEvent) => {
 
   // Push subscription management
   if (type === 'REGISTER_PUSH_SUBSCRIPTION') {
+    const { subscription, metaAddressHash, relayUrl } = message;
     event.waitUntil(
       (async () => {
         try {
-          const { subscription, metaAddressHash, relayUrl } = message as any;
           if (!subscription || !metaAddressHash) {
             throw new Error('Missing subscription or metaAddressHash');
           }
@@ -542,10 +544,10 @@ self.addEventListener('message', (event: ExtendableMessageEvent) => {
   }
 
   if (type === 'UNREGISTER_PUSH_SUBSCRIPTION') {
+    const { subscription } = message;
     event.waitUntil(
       (async () => {
         try {
-          const { subscription, metaAddressHash } = message as any;
           if (!subscription) {
             throw new Error('Missing subscription');
           }
