@@ -9,24 +9,45 @@ interface UseIdempotentTransactionParams {
   metadata?: Record<string, any>;
 }
 
+/**
+ * Two-phase transaction builder.
+ *
+ * Phase 1 – `build`: sign the transaction locally and return the txHash.
+ *   The hook persists the hash into the intent store BEFORE phase 2 runs,
+ *   so a network timeout can never leave the intent without a hash.
+ *
+ * Phase 2 – `submit`: broadcast the signed transaction to the network and
+ *   return an arbitrary result.  Throwing here still allows reconciliation
+ *   because the hash was already stored in phase 1.
+ */
+export interface TxBuilderPhases<T> {
+  /** Sign locally; return the deterministic txHash. Must not touch the network. */
+  build: () => Promise<{ txHash: string; signedTx: unknown }>;
+  /** Broadcast the pre-signed tx; return the final result on success. */
+  submit: (signedTx: unknown) => Promise<T>;
+}
+
 interface UseIdempotentTransactionReturn {
   isSubmitting: boolean;
   intentId: string | null;
   submit: <T>(
-    txBuilder: () => Promise<{ txHash: string; result: T }>,
+    phases: TxBuilderPhases<T>,
     options?: {
       onSuccess?: (result: T) => void;
       onError?: (error: Error) => void;
       reconcile?: (txHash: string) => Promise<boolean>;
-      onTxHashReady?: (txHash: string) => void;
     },
   ) => Promise<void>;
   reset: () => void;
 }
 
 /**
- * Hook to ensure idempotent transaction submission
- * Prevents double submissions and reconciles pending intents with confirmed transactions
+ * Hook to ensure idempotent transaction submission.
+ * Prevents double submissions and reconciles pending intents with confirmed transactions.
+ *
+ * Key guarantee: txHash is persisted into the intent store and activity store
+ * AFTER signing but BEFORE the network broadcast, so a timeout/crash after
+ * broadcast can always be reconciled on the next page load.
  */
 export function useIdempotentTransaction(
   params: UseIdempotentTransactionParams,
@@ -35,14 +56,14 @@ export function useIdempotentTransaction(
   const [intentId, setIntentId] = useState<string | null>(null);
   const submissionLockRef = useRef(false);
 
-  const { createIntent, getIntent, updateIntentStatus, setIntentTxHash, findPendingIntent } =
+  const { createIntent, updateIntentStatus, setIntentTxHash, findPendingIntent } =
     useTransactionIntentStore();
 
   const { addEntry: addActivity, updateStatus: updateActivity } = useActivityStore();
 
   const submit = useCallback(
     async <T>(
-      txBuilder: () => Promise<{ txHash: string; result: T }>,
+      phases: TxBuilderPhases<T>,
       options?: {
         onSuccess?: (result: T) => void;
         onError?: (error: Error) => void;
@@ -68,27 +89,21 @@ export function useIdempotentTransaction(
       submissionLockRef.current = true;
       setIsSubmitting(true);
 
-      // Create new intent
       const newIntentId = createIntent(params);
       setIntentId(newIntentId);
 
       let txHash: string | undefined;
-      let txHashCaptured = false;
 
       try {
-        // Update intent to signing
+        // ── Phase 1: build & sign (no network) ──────────────────────────────
         updateIntentStatus(newIntentId, 'signing');
 
-        // Build and sign transaction (this may throw if user rejects)
-        const { txHash: builtTxHash, result } = await txBuilder();
-        txHash = builtTxHash;
-        txHashCaptured = true;
+        const { txHash: builtHash, signedTx } = await phases.build();
+        txHash = builtHash;
 
-        // CRITICAL: Store txHash immediately before any network calls
-        // This ensures we can reconcile even if the network times out
+        // Persist hash BEFORE touching the network so a timeout can always
+        // be reconciled.
         setIntentTxHash(newIntentId, txHash);
-
-        // Add to activity store
         addActivity({
           id: txHash,
           chain: params.chain,
@@ -100,51 +115,38 @@ export function useIdempotentTransaction(
           metadata: { intentId: newIntentId },
         });
 
-        // Update intent to submitting
+        // ── Phase 2: broadcast ───────────────────────────────────────────────
         updateIntentStatus(newIntentId, 'submitting');
 
-        // Transaction is now submitted, mark as confirmed
+        const result = await phases.submit(signedTx);
+
         updateIntentStatus(newIntentId, 'confirmed');
         updateActivity(txHash, 'confirmed');
 
-        if (options?.onSuccess) {
-          options.onSuccess(result);
-        }
+        options?.onSuccess?.(result);
       } catch (error) {
         const err = error as Error;
         console.error('[IdempotentTx] Transaction failed:', err);
 
-        // If we captured txHash (even if submission failed) and have reconcile function
-        if (txHashCaptured && txHash && options?.reconcile) {
+        // txHash is set whenever phase 1 completed, even if phase 2 timed out.
+        if (txHash && options?.reconcile) {
           try {
-            console.log('[IdempotentTx] Attempting to reconcile transaction:', txHash);
-            const isConfirmed = await options.reconcile(txHash);
-
-            if (isConfirmed) {
-              // Transaction succeeded despite client-side timeout/error
-              console.log('[IdempotentTx] Transaction reconciled as confirmed:', txHash);
+            console.log('[IdempotentTx] Reconciling:', txHash);
+            const confirmed = await options.reconcile(txHash);
+            if (confirmed) {
+              console.log('[IdempotentTx] Reconciled as confirmed:', txHash);
               updateIntentStatus(newIntentId, 'confirmed');
               updateActivity(txHash, 'confirmed');
-
-              if (options?.onSuccess) {
-                // Call success with a reconciled result
-                options.onSuccess({} as T);
-              }
+              options?.onSuccess?.({} as T);
               return;
             }
           } catch (reconcileError) {
             console.error('[IdempotentTx] Reconciliation failed:', reconcileError);
-            // Continue to mark as failed
           }
         }
 
-        // Update intent as failed
         updateIntentStatus(newIntentId, 'failed', err.message);
-
-        // If we have a txHash (transaction was built but submission failed)
-        if (txHashCaptured && txHash) {
-          updateActivity(txHash, 'failed');
-        }
+        if (txHash) updateActivity(txHash, 'failed');
 
         if (options?.onError) {
           options.onError(err);
@@ -161,7 +163,6 @@ export function useIdempotentTransaction(
       createIntent,
       updateIntentStatus,
       setIntentTxHash,
-      getIntent,
       findPendingIntent,
       addActivity,
       updateActivity,
@@ -174,12 +175,7 @@ export function useIdempotentTransaction(
     submissionLockRef.current = false;
   }, []);
 
-  return {
-    isSubmitting,
-    intentId,
-    submit,
-    reset,
-  };
+  return { isSubmitting, intentId, submit, reset };
 }
 
 // Helper to map action to ActivityKind
