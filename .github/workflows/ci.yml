@@ -26,3 +26,7 @@ jobs:
       - run: pnpm install --frozen-lockfile
       - run: pnpm format:check
       - run: pnpm build
+
+      # Fails when a new critical (or more than the accepted number of high)
+      # production dependency finding appears. See docs/SECURITY_AUDIT.md.
+      - run: pnpm audit:gate
