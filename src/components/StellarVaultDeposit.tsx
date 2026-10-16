@@ -304,6 +304,7 @@ export function StellarVaultDeposit() {
           <button
             onClick={handleDeposit}
             disabled={!canSubmit}
+            data-testid="vault-deposit-submit"
             className="h-12 w-full bg-primary font-heading text-[13px] font-semibold uppercase tracking-widest text-surface transition-colors hover:brightness-110 disabled:opacity-30"
           >
             {isProcessing
