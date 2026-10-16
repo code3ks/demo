@@ -39,7 +39,11 @@ pnpm audit:gate   # what CI enforces (exit non-zero on regression)
 ```
 
 `pnpm audit:gate` runs `pnpm audit --prod --json`, compares the severity counts
-against the baseline in `scripts/audit-gate.mjs`, and prints a summary.
+against the baseline in `scripts/audit-gate.mjs`, and prints a summary. The gate
+fails when the audit does not return a successful result — a registry error
+(`{"error": {...}}`), non-JSON output, or a payload without
+`metadata.vulnerabilities`. An unsuccessful audit is never read as zero
+findings; `scripts/audit-gate.test.mjs` guards that regression.
 
 ## Remediation applied
 
@@ -62,25 +66,45 @@ against the baseline in `scripts/audit-gate.mjs`, and prints a summary.
 ### Transitive dependencies forced via `pnpm.overrides`
 
 Some findings live deep in the tree and are only reachable by forcing a patched
-version with `pnpm.overrides` (see `package.json`). Each override stays within a
-range the consumer already declares (or a compatible major), so runtime
+version with `pnpm.overrides` (see `package.json`). Except where noted, every
+override stays within a range the consumer already declares, so runtime
 behaviour is preserved:
 
-| Package            | Forced to | Reported advisory                                    |
-| ------------------ | --------- | ---------------------------------------------------- |
-| `axios`            | `1.20.0`  | Multiple GHSA advisories on the 1.x line.            |
-| `form-data`        | `4.0.6`   | GHSA-hmw2-7cc7-3qxx.                                 |
-| `hono`             | `4.13.13` | Multiple GHSA advisories on the 4.x line.            |
-| `socket.io-parser` | `4.2.7`   | GHSA-2m8v-j782-fhvr.                                 |
-| `browserslist`     | `4.29.3`  | GHSA-c83g-rgw3-j3cx, GHSA-73wf-gq98-2v4g.            |
-| `image-size`       | `2.0.4`   | GHSA-5p2g-fcmc-qvqq, GHSA-w3rx-r6r6-pgpr.            |
-| `shell-quote`      | `1.12.0`  | GHSA-pqg4-j6r4-53mv (critical), GHSA-395f-4hp3-45gv. |
-| `toml`             | `4.2.0`   | GHSA-82x6-q7mm-w9cf, GHSA-v5mp-jgw5-2x6j.            |
-| `ws`               | `8.22.0`  | GHSA-96hv-2xvq-fx4p, GHSA-58qx-3vcg-4xpx.            |
+| Override (package selector)                   | Forced to | Reported advisory                                    |
+| --------------------------------------------- | --------- | ---------------------------------------------------- |
+| `axios`                                       | `1.20.0`  | Multiple GHSA advisories on the 1.x line.            |
+| `form-data`                                   | `4.0.6`   | GHSA-hmw2-7cc7-3qxx.                                 |
+| `hono`                                        | `4.13.13` | Multiple GHSA advisories on the 4.x line.            |
+| `socket.io-parser`                            | `4.2.7`   | GHSA-2m8v-j782-fhvr.                                 |
+| `browserslist`                                | `4.29.3`  | GHSA-c83g-rgw3-j3cx, GHSA-73wf-gq98-2v4g.            |
+| `metro>image-size`                            | `2.0.4`   | GHSA-5p2g-fcmc-qvqq, GHSA-w3rx-r6r6-pgpr.            |
+| `shell-quote`                                 | `1.12.0`  | GHSA-pqg4-j6r4-53mv (critical), GHSA-395f-4hp3-45gv. |
+| `@stellar/stellar-sdk>toml`                   | `4.2.0`   | GHSA-82x6-q7mm-w9cf, GHSA-v5mp-jgw5-2x6j.            |
+| `engine.io-client>ws`, `ethers>ws`, `viem>ws` | `8.22.0`  | GHSA-96hv-2xvq-fx4p, GHSA-58qx-3vcg-4xpx.            |
+
+Overrides that cross a declared major range are scoped to the single path that
+needs them with pnpm's `parent>child` syntax, so they cannot silently change a
+different consumer:
+
+- **`ws` stays on the major each consumer declares.** The `^7` consumers
+  (`jayson`, `metro`, `react-native`, `@react-native/dev-middleware`,
+  `react-devtools-core`, `@walletconnect/jsonrpc-ws-connection`) resolve to the
+  patched `7.5.13` from their own range. Only the exact/tilde-pinned `ws` 8
+  consumers (`engine.io-client`, `ethers`, `viem`) are bumped, within major 8.
+- **`image-size` and `toml` have no patched release inside the major the
+  consumer declares** (`image-size` 1.x, `toml` 3.x), so those two overrides do
+  cross a major. They are scoped to `metro` and `@stellar/stellar-sdk`
+  respectively, and `scripts/dependency-compatibility.test.mjs` exercises each
+  affected path so the bump cannot regress silently.
 
 The `toml` override is safe because `@stellar/stellar-sdk` only uses `toml`
 inside `StellarToml.Resolver`, which the demo never calls (`@stellar/stellar-sdk`
-is used for `rpc`, `xdr`, `Address` and transaction building only).
+is used for `rpc`, `xdr`, `Address` and transaction building only). The
+compatibility test asserts that the installed `toml` still parses a valid
+`stellar.toml` and still throws on malformed input. Likewise,
+`scripts/dependency-compatibility.test.mjs` sizes a real PNG through the
+`image-size` version `metro` resolves, and confirms the `ws` 7 consumers still
+receive a constructable `ws` 7 module.
 
 ## Accepted findings
 
@@ -119,6 +143,10 @@ baseline:
 
 Raising either baseline requires a matching entry (owner + expiry) in the table
 above.
+
+The gate also fails when `pnpm audit` itself does not succeed: a registry error,
+non-JSON output, or a payload without `metadata.vulnerabilities` is treated as
+a failing audit rather than an audit with no findings.
 
 ## Review cadence
 
